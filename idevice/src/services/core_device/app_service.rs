@@ -146,13 +146,13 @@ impl<R: ReadWrite> AppServiceClient<R> {
         internal_apps: bool,
         default_apps: bool,
     ) -> Result<Vec<AppListEntry>, IdeviceError> {
-        let options = crate::plist!(dict {
-            "includeAppClips": app_clips,
-            "includeRemovableApps": removable_apps,
-            "includeHiddenApps": hidden_apps,
-            "includeInternalApps": internal_apps,
-            "includeDefaultApps": default_apps,
-        });
+        let options = list_apps_options(
+            app_clips,
+            removable_apps,
+            hidden_apps,
+            internal_apps,
+            default_apps,
+        );
         let res = self
             .inner
             .invoke_with_plist("com.apple.coredevice.feature.listapps", options)
@@ -390,5 +390,47 @@ impl<R: ReadWrite> AppServiceClient<R> {
                 ))
             }
         }
+    }
+}
+
+fn list_apps_options(
+    app_clips: bool,
+    removable_apps: bool,
+    hidden_apps: bool,
+    internal_apps: bool,
+    default_apps: bool,
+) -> plist::Dictionary {
+    crate::plist!(dict {
+        "includeAppClips": app_clips,
+        "includeRemovableApps": removable_apps,
+        "includeHiddenApps": hidden_apps,
+        "includeInternalApps": internal_apps,
+        "includeDefaultApps": default_apps,
+        // Required by the request decoder on iOS 27. Listing metadata does not
+        // need access to application containers.
+        "requireContainerAccess": false,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::list_apps_options;
+
+    #[test]
+    fn list_options_explicitly_disable_container_access() {
+        let options = list_apps_options(false, true, false, false, false);
+
+        assert_eq!(
+            options
+                .get("requireContainerAccess")
+                .and_then(plist::Value::as_boolean),
+            Some(false)
+        );
+        assert_eq!(
+            options
+                .get("includeRemovableApps")
+                .and_then(plist::Value::as_boolean),
+            Some(true)
+        );
     }
 }
