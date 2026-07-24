@@ -133,12 +133,12 @@ impl<R: ReadWrite> CoreDeviceServiceClient<R> {
         let res = match res.remove("CoreDevice.output") {
             Some(r) => r,
             None => {
-                // The device replied with an error rather than an output. Surface
-                // its contents (commonly under "CoreDevice.error") so callers can
-                // see why a feature invocation was rejected.
-                warn!("XPC response did not have an output: {res:?}");
                 return match res.get("CoreDevice.error") {
-                    Some(e) => Err(CoreDeviceError::DeviceError(format!("{e:?}")).into()),
+                    Some(error) => {
+                        let summary = summarize_core_device_error(error);
+                        warn!(%summary, "CoreDevice invocation returned an error");
+                        Err(CoreDeviceError::DeviceError(summary).into())
+                    }
                     None => Err(CoreDeviceError::MissingField("CoreDevice.output").into()),
                 };
             }
@@ -146,6 +146,38 @@ impl<R: ReadWrite> CoreDeviceServiceClient<R> {
 
         Ok(res)
     }
+}
+
+fn summarize_core_device_error(error: &plist::Value) -> String {
+    let Some(fields) = error.as_dictionary() else {
+        return "unspecified CoreDevice error".into();
+    };
+    let domain = fields
+        .get("domain")
+        .and_then(plist::Value::as_string)
+        .and_then(|value| bounded_error_text(value, 128));
+    let code = fields.get("code").and_then(plist::Value::as_signed_integer);
+    let description = fields
+        .get("userInfo")
+        .and_then(plist::Value::as_dictionary)
+        .and_then(|user_info| user_info.get("NSDebugDescription"))
+        .and_then(plist::Value::as_string)
+        .and_then(|value| bounded_error_text(value, 512));
+
+    let mut summary = domain.unwrap_or_else(|| "CoreDevice".into());
+    if let Some(code) = code {
+        summary.push_str(&format!(" code {code}"));
+    }
+    if let Some(description) = description {
+        summary.push_str(": ");
+        summary.push_str(&description);
+    }
+    summary
+}
+
+fn bounded_error_text(value: &str, max_chars: usize) -> Option<String> {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!normalized.is_empty()).then(|| normalized.chars().take(max_chars).collect())
 }
 
 fn create_xpc_version_from_string(version: impl Into<String>) -> xpc::Dictionary {
@@ -165,4 +197,26 @@ fn create_xpc_version_from_string(version: impl Into<String>) -> xpc::Dictionary
     res.insert("components".into(), XPCObject::Array(collected_version));
     res.insert("stringValue".into(), XPCObject::String(version));
     res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::summarize_core_device_error;
+
+    #[test]
+    fn core_device_errors_omit_archived_payloads() {
+        let error = crate::plist!({
+            "domain": "NSCocoaErrorDomain",
+            "code": 4865_i64,
+            "userInfo": {
+                "NSDebugDescription": "Expected to find key includeAppGroupIdentifiers.",
+            },
+            "userInfoWithNSSecureCoding": plist::Value::Data(vec![1; 4096]),
+        });
+
+        assert_eq!(
+            summarize_core_device_error(&error),
+            "NSCocoaErrorDomain code 4865: Expected to find key includeAppGroupIdentifiers."
+        );
+    }
 }
