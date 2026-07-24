@@ -407,8 +407,10 @@ fn list_apps_options(
         "includeInternalApps": internal_apps,
         "includeDefaultApps": default_apps,
         // Required by the request decoder on iOS 27. Listing metadata does not
-        // need access to application containers or App Group identifiers.
+        // need access to application containers, their paths, or App Group
+        // identifiers.
         "includeAppGroupIdentifiers": false,
+        "includeContainerPaths": false,
         "requireContainerAccess": false,
     })
 }
@@ -430,6 +432,12 @@ mod tests {
         assert_eq!(
             options
                 .get("includeAppGroupIdentifiers")
+                .and_then(plist::Value::as_boolean),
+            Some(false)
+        );
+        assert_eq!(
+            options
+                .get("includeContainerPaths")
                 .and_then(plist::Value::as_boolean),
             Some(false)
         );
